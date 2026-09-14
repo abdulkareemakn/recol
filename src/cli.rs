@@ -25,7 +25,7 @@ pub struct Args {
     /// Neovim config path
     pub nvim_config: Option<String>,
 
-    /// List available themes
+    /// List available themes and exit
     pub theme_list: bool,
 
     /// Set font family by name (fuzzy matching)
@@ -34,50 +34,235 @@ pub struct Args {
     /// Pick a random Nerd Font
     pub font_rand: bool,
 
-    /// List available Nerd Fonts
+    /// List available Nerd Fonts and exit
     pub font_list: bool,
 
-    /// Print palette without applying
+    /// Print the palette without applying it
     pub show: bool,
 
-    /// Output as JSON
+    /// Output as JSON instead of human-readable text
     pub json: bool,
 
-    /// Apply for specific target
+    /// Targets to apply the theme to (env: RECOL_TARGET)
     pub targets: Vec<Target>,
 
-    /// Run interactive mode
+    /// Run interactive theme browser
     pub interactive: bool,
 
-    /// Exit after selecting a theme
+    /// Exit immediately after selecting a theme in interactive mode
     pub quit_on_select: bool,
 
-    /// Init input mode
+    /// Enter init input mode (used at startup)
     pub init_input: bool,
 
     /// Show init help at startup
     pub init_help: bool,
 
-    // Media path
+    /// Path to an image or video to extract a theme/palette from
     pub media: Option<std::path::PathBuf>,
 
-    // max_colors param
+    /// Number of palette colors to generate from media (--palettegen)
     pub palettegen: Option<u8>,
 }
 
-// Standard ANSI color codes
-const RESET: &str = "\x1b[0m";
-const GREEN: &str = "\x1b[32m";
-const BLUE: &str = "\x1b[34m";
-const MAGENTA: &str = "\x1b[35m";
-const CYAN: &str = "\x1b[36m";
-const BRIGHT_BLACK: &str = "\x1b[90m";
-const BRIGHT_BLUE: &str = "\x1b[94m";
-const BRIGHT_MAGENTA: &str = "\x1b[95m";
+impl Args {
+    /// Parses CLI arguments, falling back to RECOL_ADJUST / RECOL_TARGET env vars.
+    pub fn parse() -> Self {
+        let mut args = Self::default();
+        // Tracks which flag is expecting a value on the *next* iteration
+        // (e.g. after seeing `-t`, `last` holds 't' so the next token is
+        // consumed as the theme name).
+        let mut last: Option<char> = None;
+
+        if let Some(arg) = std::env::var("RECOL_ADJUST").ok() {
+            args.adjustments(arg);
+        }
+
+        if let Some(arg) = std::env::var("RECOL_TARGET").ok() {
+            args.targets(arg);
+        }
+
+        let mut iter = std::env::args().skip(1);
+        while let Some(arg) = iter.next() {
+            if let Some(flag) = arg.strip_prefix("--") {
+                match flag {
+                    // Flags below take a value; record which one so the
+                    // next loop iteration assigns it.
+                    "theme" => last = Some('t'),
+                    "font" => last = Some('f'),
+                    "contains" => last = Some('c'),
+                    "target" => last = Some('T'),
+                    "nvim_config" => last = Some('0'),
+                    "adjust" => last = Some('a'),
+                    "media" => last = Some('m'),
+                    "palettegen" => last = Some('G'),
+                    // Boolean flags, applied immediately.
+                    "theme-list" => args.theme_list = true,
+                    "font-list" => args.font_list = true,
+                    "font-rand" => args.font_rand = true,
+                    "rand" => args.rand = true,
+                    "dark" => args.dark = true,
+                    "light" => args.light = true,
+                    "show" => args.show = true,
+                    "json" => args.json = true,
+                    "interactive" => args.interactive = true,
+                    "quit-on-select" => args.quit_on_select = true,
+                    "init-input" => args.init_input = true,
+                    "init-help" => args.init_help = true,
+                    // Terminal flags: print and exit.
+                    "help" => {
+                        println!("{}", help());
+                        std::process::exit(0);
+                    }
+                    "logo" => {
+                        println!("{}", logo());
+                        std::process::exit(0);
+                    }
+                    "version" => {
+                        println!("{}", VERSION);
+                        std::process::exit(0);
+                    }
+                    // Unknown long flags are silently ignored.
+                    _ => (),
+                }
+            } else if let Some(flags) = arg.strip_prefix('-') {
+                // Short flags can be combined, e.g. `-rdj`.
+                for c in flags.chars() {
+                    match c {
+                        // These expect a value on the next token.
+                        't' | 'f' | 'c' | 'T' | 'a' | 'm' => last = Some(c),
+                        'r' => args.rand = true,
+                        'd' => args.dark = true,
+                        'l' => args.light = true,
+                        'F' => args.font_rand = true,
+                        's' => args.show = true,
+                        'j' => args.json = true,
+                        'i' => args.interactive = true,
+                        'L' => args.theme_list = true,
+                        'h' => {
+                            println!("{}", help());
+                            std::process::exit(0);
+                        }
+                        'V' => {
+                            println!("{}", VERSION);
+                            std::process::exit(0);
+                        }
+                        // Unknown short flags are silently ignored.
+                        _ => (),
+                    }
+                }
+            } else {
+                // Not a flag: this is a value for whichever flag was
+                // last recorded, or a bare positional theme name.
+                match last.take() {
+                    Some('t') => {
+                        args.theme.replace(arg);
+                    }
+                    Some('f') => {
+                        args.font.replace(arg);
+                    }
+                    Some('c') => {
+                        args.contains.replace(arg);
+                    }
+                    Some('0') => {
+                        args.nvim_config.replace(arg);
+                    }
+                    Some('T') => {
+                        args.targets(arg);
+                    }
+                    Some('a') => {
+                        args.adjustments(arg);
+                    }
+                    Some('m') => {
+                        // Require ffmpeg only the first time --media is used.
+                        if args.media.is_none() && !is_ffmpeg_installed() {
+                            eprintln!("Warning: this feature requires ffmpeg to be installed on your system.");
+                            continue;
+                        }
+                        let path = std::path::PathBuf::from(&arg);
+                        if path.is_file() {
+                            args.media.replace(path);
+                        } else if arg == "W" || arg == "wallpaper" {
+                            // Special-case: pull the current desktop wallpaper.
+                            if let Ok(Some(path)) = crate::wallpaper::desktop_wallpaper_path() {
+                                args.media.replace(path);
+                                continue;
+                            }
+                        }
+                    }
+                    Some('G') => {
+                        args.palettegen = arg.parse::<u8>().ok();
+                    }
+                    // No pending flag: treat as a positional theme name.
+                    _ => {
+                        args.theme.replace(arg);
+                    }
+                }
+            }
+        }
+
+        args
+    }
+
+    /// Builds the list of theme filters (dark/light/contains) from current args.
+    pub fn theme_filters(&self) -> Vec<lib::ThemeFilter<'_>> {
+        let mut filters = Vec::new();
+        if self.light {
+            filters.push(lib::ThemeFilter::Light);
+        }
+        if self.dark {
+            filters.push(lib::ThemeFilter::Dark);
+        }
+        if let Some(s) = &self.contains {
+            filters.push(lib::ThemeFilter::Contains(s));
+        }
+        filters
+    }
+
+    /// Parses a comma-separated target list, or prints all targets and exits
+    /// if the special value "list" is given.
+    fn targets(&mut self, arg: String) {
+        if arg == "list" {
+            for t in targets::ALL_TARGETS {
+                println!("{}", t);
+            }
+            std::process::exit(0);
+        }
+        for p in arg.split(",") {
+            if let Ok(t) = p.parse::<Target>() {
+                if !self.targets.contains(&t) {
+                    self.targets.push(t);
+                }
+            }
+        }
+    }
+
+    /// Parses adjustment spec string, a file path containing one, or the
+    /// special reset value "_". Prints adjustment help and exits on "help".
+    fn adjustments(&mut self, mut arg: String) {
+        if arg == "help" {
+            println!("{}", adjust_help());
+            std::process::exit(0);
+        }
+        let path = std::path::PathBuf::from(&arg);
+        if path.is_file() {
+            arg = std::fs::read_to_string(path).unwrap();
+        }
+        if arg == "_" {
+            self.adjust.clear();
+            self.adjust.push(ThemeAdjustment::None);
+            return;
+        }
+        match parse_theme_adjustments(&arg) {
+            Ok(adjust) => self.adjust.extend_from_slice(&adjust),
+            Err(e) => panic!("{e}"),
+        }
+    }
+}
 
 fn logo() -> String {
     format!(
-        "{bright_black}v0.2.4  [https://github.com/nlkli/recol]{reset}
+        "{bright_black}v0.2.5  [https://github.com/nlkli/recol]{reset}
 {blue}  ____    _____    ____    ___    _ {reset}
 {bright_blue} |  _ \\  | ____|  / ___|  / _ \\  | |{reset}
 {cyan} | |_) | |  _|   | |     | | | | | |{reset}
@@ -94,43 +279,35 @@ fn logo() -> String {
     )
 }
 
-const VERSION: &str = "recol 0.2.4 [https://github.com/nlkli/recol]";
+const VERSION: &str = "recol 0.2.5 [https://github.com/nlkli/recol]";
+
+// NOTE: some flags (e.g. --font*, --nvim_config, --init-input,
+// --init-help, --quit-on-select) are intentionally left out of --help.
+// They're legacy options and it's unclear whether they're still needed,
+// so we're not committing to documenting/supporting them yet.
 fn help() -> String {
     format!(
         r#"CLI utility for changing the color scheme
 {magenta}https://github.com/nlkli/recol{reset}
 
-{green}Supported targets:{reset}
-alacritty, ghostty, wezterm, neovim, vim, pi.
-
 {green}Usage:{reset} {blue}recol [OPTIONS] [THEME_NAME]{reset}
 
-{green}Options:{reset}
-  {blue}-t{reset}, {blue}--theme <NAME>{reset}
-      Apply a theme by name (fuzzy matching)
-  {blue}-r{reset}, {blue}--rand{reset}
-      Apply a random theme
-  {blue}-d{reset}, {blue}--dark{reset}; {blue}-l{reset}, {blue}--light{reset}
-  {blue}-c{reset}, {blue}--contains <STR>{reset}
-      Filter themes by dark, light or name substring
-      (used with --rand, --theme or --theme-list)
-  {blue}-a{reset}, {blue}--adjust <SPEC|PATH>{reset} [env: RECOL_ADJUST]
-      Apply color adjustments (see --adjust help)
-  {blue}-i{reset}, {blue}--interactive{reset}
-      Browse and apply themes interactively
-  {blue}-m{reset}, {blue}--media <PATH>{reset}
-      Generate a theme from an image/video (requires ffmpeg)
-  {blue}--palettegen <MAX_COLORS>{reset}  Output media palette colors
-  {blue}-f{reset}, {blue}--font <NAME>{reset}
-      Set font family by name (fuzzy matching)
-  {blue}-F{reset}, {blue}--font-rand{reset}
-      Pick a random Nerd Font
+{green}Options:{reset} (most flags can be combined)
   {blue}-T{reset}, {blue}--target <NAME,...>{reset} [env: RECOL_TARGET]
       Apply for specific target (see --target list)
-  {blue}-L{reset}, {blue}--theme-list{reset}  List available themes
-  {blue}--font-list{reset}       List available Nerd Fonts
-  {blue}-s{reset}, {blue}--show{reset}
-      Show the theme color palette without applying it
+  {blue}-r{reset}, {blue}--rand{reset}  Select a random
+  {blue}-d{reset}, {blue}--dark{reset}; {blue}-l{reset}, {blue}--light{reset}  Restrict to dark or light
+  {blue}-c{reset}, {blue}--contains <STR>{reset}  Filter by name substring
+  {blue}-i{reset}, {blue}--interactive{reset}
+      Browse and apply themes interactively
+  {blue}-m{reset}, {blue}--media <PATH/W>{reset} [requires ffmpeg]
+      Derive a theme from an image/video;
+      use W for current desktop wallpaper
+  {blue}--palettegen <N>{reset}  Output N palette colors from media
+  {blue}-a{reset}, {blue}--adjust <SPEC|PATH>{reset} [env: RECOL_ADJUST]
+      Apply color adjustments (see --adjust help)
+  {blue}-L{reset}, {blue}--list{reset}  List available themes
+  {blue}-s{reset}, {blue}--show{reset}  Show a color palette
   {blue}-j{reset}, {blue}--json{reset}  Output theme/list/media as JSON
   {blue}-h{reset}, {blue}--help{reset}; {blue}-V{reset}, {blue}--version{reset}; {blue}--logo{reset}"#,
         reset = RESET,
@@ -194,166 +371,25 @@ fn adjust_help() -> String {
     )
 }
 
-impl Args {
-    pub fn parse() -> Self {
-        let mut args = Self::default();
-        let mut last: Option<char> = None;
-
-        if let Some(arg) = std::env::var("RECOL_ADJUST").ok() {
-            args.adjustments(arg);
-        }
-
-        if let Some(arg) = std::env::var("RECOL_TARGET").ok() {
-            args.targets(arg);
-        }
-
-        let mut iter = std::env::args().skip(1);
-        while let Some(arg) = iter.next() {
-            if let Some(flag) = arg.strip_prefix("--") {
-                match flag {
-                    "theme" => last = Some('t'),
-                    "font" => last = Some('f'),
-                    "contains" => last = Some('c'),
-                    "target" => last = Some('T'),
-                    "nvim_config" => last = Some('0'),
-                    "adjust" => last = Some('a'),
-                    "media" => last = Some('m'),
-                    "palettegen" => last = Some('G'),
-                    "theme-list" => args.theme_list = true,
-                    "font-list" => args.font_list = true,
-                    "font-rand" => args.font_rand = true,
-                    "rand" => args.rand = true,
-                    "dark" => args.dark = true,
-                    "light" => args.light = true,
-                    "show" => args.show = true,
-                    "json" => args.json = true,
-                    "interactive" => args.interactive = true,
-                    "quit-on-select" => args.quit_on_select = true,
-                    "init-input" => args.init_input = true,
-                    "init-help" => args.init_help = true,
-                    "help" => {
-                        println!("{}", help());
-                        std::process::exit(0);
-                    }
-                    "logo" => {
-                        println!("{}", logo());
-                        std::process::exit(0);
-                    }
-                    "version" => {
-                        println!("{}", VERSION);
-                        std::process::exit(0);
-                    }
-                    _ => (),
-                }
-            } else if let Some(flags) = arg.strip_prefix('-') {
-                for c in flags.chars() {
-                    match c {
-                        't' | 'f' | 'c' | 'T' | 'a' | 'm' => last = Some(c),
-                        'r' => args.rand = true,
-                        'd' => args.dark = true,
-                        'l' => args.light = true,
-                        'F' => args.font_rand = true,
-                        's' => args.show = true,
-                        'j' => args.json = true,
-                        'i' => args.interactive = true,
-                        'L' => args.theme_list = true,
-                        'h' => {
-                            println!("{}", help());
-                            std::process::exit(0);
-                        }
-                        'V' => {
-                            println!("{}", VERSION);
-                            std::process::exit(0);
-                        }
-                        _ => (),
-                    }
-                }
-            } else {
-                match last.take() {
-                    Some('t') => {
-                        args.theme.replace(arg);
-                    }
-                    Some('f') => {
-                        args.font.replace(arg);
-                    }
-                    Some('c') => {
-                        args.contains.replace(arg);
-                    }
-                    Some('0') => {
-                        args.nvim_config.replace(arg);
-                    }
-                    Some('T') => {
-                        args.targets(arg);
-                    }
-                    Some('a') => {
-                        args.adjustments(arg);
-                    }
-                    Some('m') => {
-                        let path = std::path::PathBuf::from(arg);
-                        if path.is_file() {
-                            args.media.replace(path);
-                        }
-                    }
-                    Some('G') => {
-                        args.palettegen = arg.parse::<u8>().ok();
-                    }
-                    _ => {
-                        args.theme.replace(arg);
-                    }
-                }
-            }
-        }
-
-        args
-    }
-
-    pub fn theme_filters(&self) -> Vec<lib::ThemeFilter<'_>> {
-        let mut filters = Vec::new();
-        if self.light {
-            filters.push(lib::ThemeFilter::Light);
-        }
-        if self.dark {
-            filters.push(lib::ThemeFilter::Dark);
-        }
-        if let Some(s) = &self.contains {
-            filters.push(lib::ThemeFilter::Contains(s));
-        }
-        filters
-    }
-
-    fn targets(&mut self, arg: String) {
-        if arg == "list" {
-            for t in targets::ALL_TARGETS {
-                println!("{}", t);
-            }
-            std::process::exit(0);
-        }
-        for p in arg.split(",") {
-            if let Ok(t) = p.parse::<Target>() {
-                if !self.targets.contains(&t) {
-                    self.targets.push(t);
-                }
-            }
-        }
-    }
-
-    fn adjustments(&mut self, mut arg: String) {
-        if arg == "help" {
-            println!("{}", adjust_help());
-            std::process::exit(0);
-        }
-        let path = std::path::PathBuf::from(&arg);
-        if path.is_file() {
-            arg = std::fs::read_to_string(path).unwrap();
-        }
-        if arg == "_" {
-            self.adjust.clear();
-            self.adjust.push(ThemeAdjustment::None);
-            return;
-        }
-        match parse_theme_adjustments(&arg) {
-            Ok(adjust) => self.adjust.extend_from_slice(&adjust),
-            Err(e) => panic!("{e}"),
-        }
-    }
+/// Checks whether `ffmpeg` is available in PATH.
+fn is_ffmpeg_installed() -> bool {
+    use std::process;
+    process::Command::new("ffmpeg")
+        .arg("-version")
+        .stdout(process::Stdio::null())
+        .stderr(process::Stdio::null())
+        .status()
+        .map(|status| status.success())
+        .unwrap_or(false)
 }
+
+// Standard ANSI color codes
+const RESET: &str = "\x1b[0m";
+const GREEN: &str = "\x1b[32m";
+const BLUE: &str = "\x1b[34m";
+const MAGENTA: &str = "\x1b[35m";
+const CYAN: &str = "\x1b[36m";
+const BRIGHT_BLACK: &str = "\x1b[90m";
+const BRIGHT_BLUE: &str = "\x1b[94m";
+const BRIGHT_MAGENTA: &str = "\x1b[95m";
+

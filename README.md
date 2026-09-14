@@ -11,9 +11,9 @@
 
 ### Terminal support notes
 
-- **Ghostty** requires a manual reload (e.g. `Ctrl + Shift + ,` on Linux or `Cmd + Shift + ,` on macOS).
+- **Ghostty**: now reloads automatically via `SIGUSR2` (should work on most systems); if not, use the manual shortcut (`Ctrl + Shift + ,` on Linux or `Cmd + Shift + ,` on macOS).
 - **Kitty 0.47.0+** automatically reloads config changes by default. Older versions, or configurations with auto reload disabled, require `Ctrl + Shift + F5` (`Ctrl + Cmd + ,` on macOS). See [Kitty's auto reload documentation](https://sw.kovidgoyal.net/kitty/conf/#opt-kitty.auto_reload_config).
-- **Alacritty**, **WezTerm** supports hot configuration reload. Changes are applied immediately without restarting the terminal.
+- **Alacritty**, **WezTerm** support hot configuration reload. Changes are applied immediately without restarting the terminal.
 
 ### Neovim integration
  
@@ -90,48 +90,37 @@ end
 git clone https://github.com/nlkli/recol
 cd recol
 cargo build --release
-cp target/release/recol /usr/local/bin/
+./target/release/recol --help
 ```
 
-### Cargo Install
- 
+### Homebrew
+
+```sh
+brew install nlkli/tap/recol
+```
+
+### Cargo
+
 ```sh
 cargo install --git https://github.com/nlkli/recol --branch main --force
 ```
 
-### Pre-built binaries
+### Build Colorschemes Collection
 
-Download the latest release binary for your platform from the [Releases](https://github.com/nlkli/recol/releases) page.
+Run `./fetch.sh` to download the latest themes from [iTerm2-Color-Schemes](https://github.com/mbadolato/iTerm2-Color-Schemes) to `./colorschemes`. Add custom themes there or filter unwanted themes in `build.rs`.
 
-### Fetch and rebuild color schemes
-
-Fetch the latest themes from [iTerm2-Color-Schemes](https://github.com/mbadolato/iTerm2-Color-Schemes) and rebuild the embedded binary:
+Build the embedded color schemes binary:
 
 ```sh
-RECOL_FETCH_GHOSSTY_THEMES=1 \
-RECOL_BUILD_COLORSCHEMES_BIN=1 \
-cargo build --release
+RECOL_BUILD_COLORSCHEMES_BIN=1 cargo build --release
 ```
 
-### Custom color schemes
-
-To build with your own themes, point `RECOL_GHOSSTY_THEMES_DIR` to your themes directory:
+For a custom themes directory, use `RECOL_GHOSSTY_THEMES_DIR`:
 
 ```sh
-RECOL_GHOSSTY_THEMES_DIR=/path/to/your/themes \
+RECOL_GHOSSTY_THEMES_DIR=/path/to/themes \
 RECOL_BUILD_COLORSCHEMES_BIN=1 \
 cargo build --release
-```
-
-Themes use the [Ghostty config format](https://github.com/mbadolato/iTerm2-Color-Schemes/blob/master/ghostty/0x96f) (no file extension). The filename becomes the theme name.
-
-To add your themes to the default collection, place them in `./colorschemes` (run `./fetch.sh` first to populate it). Filter unwanted themes in `build.rs`:
-
-```rust
-recol_lib::build_colorschemes_bin(
-    ...,
-    |name| !["theme_to_exclude"].contains(&name),
-)
 ```
 
 ### Usage Examples
@@ -141,36 +130,9 @@ recol londonsohonight         # fuzzy match - applies closest theme by name
 recol -rd --contains Gruvbox  # random dark theme with "Gruvbox" in name
 recol --theme-list -l --json  # list light themes as JSON
 recol dracula --dark --show   # preview palette without applying
-recol -t tokyo --json         # print tokyo theme as JSON
+recol tokyo --json            # print tokyo theme as JSON
 recol terafox --target nvim   # apply theme for specific target
 recol                         # print current theme name (add --show or --json for more)
-```
-
-### TUI Keybindings
-
-```text
-NAVIGATION
-  ↑ / k / -      Move selection up
-  ↓ / j / +      Move selection down
-  g / G          Jump to first / last
-  Ctrl+ u / d    Half page up / down
-INPUT & FILTER
-  / : i          Enter input mode
-  a              Enter adjust input mode
-  Backspace      Delete last character
-  Esc / Enter    Exit filter mode
-  f              Filter by first word (family)
-LIST ACTIONS
-  s / r          Shuffle / Reverse order
-  d / l          Dark / Light only
-  h              Recently applied (history)
-  Space          Reset filters (show all)
-GENERAL
-  Enter          Apply theme
-  ? / H          Open this help
-  q / Ctrl+c     Quit
-CLI ARGS
-  --quit-on-select
 ```
 
 ### Color Adjustments
@@ -178,6 +140,10 @@ CLI ARGS
 ![recol-demo-adjust-gif](https://github.com/nlkli/assetsrepo/blob/main/recol.demo/recol-demo-adjust.gif)
 
 Adjust theme colors with `--adjust "group.adjustment=value,..."`. Supports brightness, contrast, saturation, hue, exposure, gamma, temperature, tint, normalize and more. Apply to UI elements, specific colors, or the full ANSI palette using short group names (e.g. pal, bg, red).
+
+```sh
+recol --adjust help
+```
 
 In interactive mode you can change adjustments live and see the preview update instantly.
 
@@ -188,6 +154,7 @@ In interactive mode you can change adjustments live and see the preview update i
 `recol` can derive a color scheme from any image/video frame. Pass a media file with `--media` and recol builds a theme automatically:
 
 ```sh
+recol -m W  # generate and apply a theme from current desktop wallpaper
 recol --media ~/Pictures/Sunset.png            # generate and apply a theme from an image
 recol -m ~/Videos/X.gif --json                 # generate a theme and output it as JSON
 recol -m ~/Photo/Landscape.jpg --palettegen 12 # print the generated palette
@@ -199,12 +166,6 @@ recol -m ~/Photo/Tree.png -a t.e=9,bb.b=-12    # generate and apply with color a
 **Requirements:** [ffmpeg](https://ffmpeg.org) must be installed and available on `PATH`.
 
 This feature requires no additional Cargo/Rust dependencies. recol simply invokes the ffmpeg binary already installed on the system and uses its palettegen functionality to extract colors.
-
-**How it works:**
-
-1. `recol` invokes the system-installed `ffmpeg` and uses `palettegen=max_colors=N` to extract the dominant palette from the media into a PPM file.
-2. `recol` reads the unique colors from the generated PPM and maps them to the 16 ANSI slots.
-3. The theme auto-detects light vs. dark and aligns the derived colors to a shared luminance for visual consistency.
 
 ### Adding Support for New Targets
 
@@ -236,7 +197,7 @@ pub const ALL_TARGETS: [Target; 8] = [ /* ..., Target::Vscode */ ];
 
 ![recol-demo-gif](https://github.com/nlkli/assetsrepo/blob/main/recol.demo/recol-demo.gif)
 
-![recol-demo-img-1](https://github.com/nlkli/assetsrepo/blob/main/recol.demo/recol-demo-img-1.png)
+![recol-demo-media-to-theme](https://github.com/nlkli/assetsrepo/blob/main/recol.demo/recol-demo-media-to-theme.jpg)
 
 ![recol-demo-img-2](https://github.com/nlkli/assetsrepo/blob/main/recol.demo/recol-demo-img-2.png)
 
@@ -246,19 +207,19 @@ pub const ALL_TARGETS: [Target; 8] = [ /* ..., Target::Vscode */ ];
 ───────────────────────────────────────────────────────────────────────────────
 Language            Files       Lines    Blanks  Comments       Code Complexity
 ───────────────────────────────────────────────────────────────────────────────
-Rust                   22       5,746       561       404      4,781        610
-Markdown                2         424        78         0        346          0
-TOML                    2          46         5         0         41          1
+Rust                   25       6,255       609       431      5,215        684
+TOML                    2          49         6         0         43          1
 License                 1          21         4         0         17          0
-Shell                   1           8         2         1          5          0
+Markdown                1         235        56         0        179          0
+Shell                   1          15         4         7          4          0
 ───────────────────────────────────────────────────────────────────────────────
-Total                  28       6,245       650       405      5,190        611
+Total                  30       6,575       679       438      5,458        685
 ───────────────────────────────────────────────────────────────────────────────
-Estimated Cost to Develop (organic) $152,253
-Estimated Schedule Effort (organic) 6.73 months
-Estimated People Required (organic) 2.01
+Estimated Cost to Develop (organic) $160,519
+Estimated Schedule Effort (organic) 6.86 months
+Estimated People Required (organic) 2.08
 ───────────────────────────────────────────────────────────────────────────────
-Processed 212,719 bytes, 0.213 megabytes (SI)
+Processed 222,024 bytes, 0.222 megabytes (SI)
 ───────────────────────────────────────────────────────────────────────────────
 ```
 

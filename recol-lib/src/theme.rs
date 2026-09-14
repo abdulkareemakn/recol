@@ -417,15 +417,15 @@ impl ColorScheme {
         });
         let mut n = 0;
         while fg.wcag_contrast_ratio(&bg) < 4.5 && n < 99 {
-            fg = fg.saturate(-2.0).shade(shade_factor_step);
+            fg = fg.saturate(1.0).shade(shade_factor_step);
             n += 1;
         }
         if is_light {
-            fg = fg.shade(-0.33);
+            fg = fg.shade(-0.3);
             cur_bg = cur_bg.brighten(-9.);
             cur_fg = cur_fg.shade(0.3).blend(&bg, 0.1);
         } else {
-            fg = fg.shade(0.11);
+            fg = fg.shade(0.1);
             cur_bg = cur_bg.brighten(9.);
             cur_fg = cur_fg.shade(-0.3).blend(&bg, 0.1);
         }
@@ -433,7 +433,7 @@ impl ColorScheme {
 
         let [red, green, yellow, blue, magenta, cyan, orange, pink] = colors;
 
-        let bright_factor = if is_light { -18. } else { 18. };
+        let bright_factor = if is_light { -17. } else { 15. };
         let mut cs = Self {
             bg: bg.css(),
             fg: fg.css(),
@@ -458,14 +458,14 @@ impl ColorScheme {
                 pink: pink.css(),
             },
             bright: AnsiColors {
-                black: p10[0].saturate(-3.0).shade(-0.4).css(),
+                black: p10[0].saturate(-3.0).shade(-0.6).css(),
                 red: red.brighten(bright_factor).css(),
                 green: green.brighten(bright_factor).css(),
                 yellow: yellow.brighten(bright_factor).css(),
                 blue: blue.brighten(bright_factor).css(),
                 magenta: magenta.brighten(bright_factor).css(),
                 cyan: cyan.brighten(bright_factor).css(),
-                white: p10[9].saturate(-3.0).shade(0.3).css(),
+                white: p10[9].saturate(-3.0).shade(0.33).css(),
                 orange: orange.brighten(bright_factor).css(),
                 pink: pink.brighten(bright_factor).css(),
             },
@@ -475,10 +475,6 @@ impl ColorScheme {
             crate::ThemeColorGroup::Text,
             21.,
             crate::NormalizeChannel::Lightness,
-        ));
-        cs.apply_adjustment(&ThemeAdjustment::Saturation(
-            crate::ThemeColorGroup::Text,
-            2.,
         ));
 
         Ok(cs)
